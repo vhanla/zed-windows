@@ -1,8 +1,9 @@
 name: Zed Nightly Build
+
 on:
   schedule:
     # Runs every night at midnight UTC
-    - cron: "0 0 * * *"  # Fixed invalid cron syntax
+    - cron: "0 0 * * *"
   push:
     branches:
       - main
@@ -15,9 +16,9 @@ jobs:
         graphics_backend: [vulkan]
         include:
           - graphics_backend: vulkan
-            build_artifact_name: zed-release-vulkan  # Specific artifact name
+            build_artifact_name: zed-release-vulkan
             build_flags: ""
-    
+
     steps:
       - name: Configure Git long paths
         run: |
@@ -35,27 +36,29 @@ jobs:
           repository: zed-industries/zed
           ref: main
       
-      # Install Rust nightly with WebAssembly target
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly
           override: true
           target: wasm32-wasip1
+
+      - name: Work around spurious network errors in curl 8.0
+        run: |
+          if rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then
+            echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV
+          fi
       
-      # Cache Rust dependencies
       - name: Configure Rust caching
         uses: Swatinem/rust-cache@v2.7.3
         with:
           key: vulkan
       
-      # Build Zed with Vulkan backend using all cores
       - name: Build release binary
         env:
           RUSTFLAGS: ${{ matrix.build_flags }}
         run: cargo build --release -j ${{ env.NUM_CORES }}
       
-      # Upload build artifact
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -70,25 +73,21 @@ jobs:
       contents: write
     
     steps:
-      # Download build artifact
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
           path: artifacts
       
-      # Generate release timestamp
       - name: Generate release timestamp
         id: release_date
         run: echo "RELEASE_TIMESTAMP=$(date +'%Y%m%d')" >> $GITHUB_ENV
       
-      # Prepare release package
       - name: Package release build
         run: |
           mkdir -p zed-release-vulkan
           mv artifacts/zed-release-vulkan/zed.exe zed-release-vulkan/
           zip -r zed-windows-vulkan.zip zed-release-vulkan/*
       
-      # Create GitHub release
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
