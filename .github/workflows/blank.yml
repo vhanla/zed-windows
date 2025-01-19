@@ -12,15 +12,11 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        # Define build configurations for different graphics backends
-        graphics_backend: [vulkan, opengl]
+        graphics_backend: [vulkan]
         include:
           - graphics_backend: vulkan
-            build_artifact_name: zed-release-vulkan  # More specific artifact name
+            build_artifact_name: zed-release-vulkan  # Specific artifact name
             build_flags: ""
-          - graphics_backend: opengl
-            build_artifact_name: zed-release-opengl
-            build_flags: "--cfg gles"
     
     steps:
       - name: Configure Git long paths
@@ -34,7 +30,7 @@ jobs:
             -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
       
       - name: Checkout repository
-        uses: actions/checkout@v3  # Consider upgrading to v4
+        uses: actions/checkout@v3
         with:
           repository: zed-industries/zed
           ref: main
@@ -47,25 +43,25 @@ jobs:
           override: true
           target: wasm32-wasip1
       
-      # Cache Rust dependencies based on graphics backend
+      # Cache Rust dependencies
       - name: Configure Rust caching
         uses: Swatinem/rust-cache@v2.7.3
         with:
-          key: ${{ matrix.graphics_backend }}
+          key: vulkan
       
-      # Build Zed with appropriate graphics backend configuration
+      # Build Zed with Vulkan backend using all cores
       - name: Build release binary
         env:
           RUSTFLAGS: ${{ matrix.build_flags }}
-        run: cargo build --release
+        run: cargo build --release -j ${{ env.NUM_CORES }}
       
-      # Upload build artifacts
-      - name: Upload build artifacts
+      # Upload build artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.build_artifact_name }}
           path: target/release/zed.exe
-          retention-days: 5  # Add retention period for artifacts
+          retention-days: 5
   
   release:
     needs: build
@@ -74,8 +70,8 @@ jobs:
       contents: write
     
     steps:
-      # Download all build artifacts
-      - name: Download build artifacts
+      # Download build artifact
+      - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -85,32 +81,23 @@ jobs:
         id: release_date
         run: echo "RELEASE_TIMESTAMP=$(date +'%Y%m%d')" >> $GITHUB_ENV
       
-      # Prepare release packages
-      - name: Package release builds
+      # Prepare release package
+      - name: Package release build
         run: |
-          # Create directories for different builds
-          mkdir -p zed-release-vulkan zed-release-opengl
-          
-          # Move executables to their respective directories
+          mkdir -p zed-release-vulkan
           mv artifacts/zed-release-vulkan/zed.exe zed-release-vulkan/
-          mv artifacts/zed-release-opengl/zed.exe zed-release-opengl/
-          
-          # Create zip archives
           zip -r zed-windows-vulkan.zip zed-release-vulkan/*
-          zip -r zed-windows-opengl.zip zed-release-opengl/*
       
       # Create GitHub release
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: Zed Nightly ${{ env.RELEASE_TIMESTAMP }}  # More descriptive release name
-          tag_name: nightly-${{ env.RELEASE_TIMESTAMP }}  # Better tag format
+          name: Zed Nightly ${{ env.RELEASE_TIMESTAMP }}
+          tag_name: nightly-${{ env.RELEASE_TIMESTAMP }}
           draft: false
           make_latest: true
           body: |
             Nightly build of Zed editor for Windows
             - Vulkan backend: Standard graphics backend
-            - OpenGL backend: Alternative backend for wider compatibility
           files: |
             zed-windows-vulkan.zip
-            zed-windows-opengl.zip
