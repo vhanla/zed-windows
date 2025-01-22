@@ -1,109 +1,137 @@
-name: Zed Nightly Build
+name: Build and Release Zed for Windows (Stable)
+
 on:
-  schedule:
-    # Runs every night at midnight UTC
-    - cron: "0 0 * * *"  # Fixed invalid cron syntax
   push:
     branches:
       - main
+    paths:
+      - ".github/workflows/stable.yml"
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      manual_release:
+        description: "Manual release?"
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      latest_release: ${{ steps.latest_release.outputs.tag }}
+      new_release: ${{ steps.check_release.outputs.new_release }}
+    steps:
+      - name: Get latest release tag from Zed
+        id: latest_release
+        run: |
+          latest_release=$(curl -s "https://api.github.com/repos/zed-industries/zed/releases/latest" | jq -r .tag_name)
+          echo "tag=$latest_release" >> $GITHUB_OUTPUT
+      - name: Check if there is a new release
+        id: check_release
+        run: |
+          my_release=$(curl -s "https://api.github.com/repos/vhanla/zed-windows/releases/latest" | jq -r .tag_name)
+          if [ "$my_release" != "${{ steps.latest_release.outputs.tag }}" ]; then
+            echo "new_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "new_release=false" >> $GITHUB_OUTPUT
+          fi
+
   build:
     runs-on: windows-latest
+    needs: check
+    if: needs.check.outputs.new_release == 'true' || github.event.inputs.manual_release == 'true' || github.event_name == 'push'
     strategy:
       matrix:
-        # Only build Vulkan
-        graphics_backend: [vulkan]
-        include:
-          - graphics_backend: vulkan
-            build_artifact_name: zed-release-vulkan  # Specific artifact name
-            build_flags: ""
-    
+        build_type: [vulkan, opengl]
     steps:
-      - name: Configure Git long paths
+      - name: Enable long paths in Git
         run: |
           git config --system core.longpaths true
-      
-      - name: Configure Windows long paths
+      - name: Enable long paths in Windows
         shell: powershell
         run: |
           New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
             -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
-      
-      - name: Checkout repository
-        uses: actions/checkout@v3  # Consider upgrading to v4
+      - name: Checkout Zed
+        uses: actions/checkout@v4
         with:
           repository: zed-industries/zed
-          ref: main
-      
-      # Install Rust nightly with WebAssembly target
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+          ref: ${{ needs.check.outputs.latest_release }}
+      - name: Get toolchain channel
+        id: toolchain
+        shell: powershell
+        run: |
+          $channel = (Get-Content rust-toolchain.toml | Select-String -Pattern 'channel' | ForEach-Object { ($_ -split '"')[1] })
+          echo "channel=$channel" >> $GITHUB_OUTPUT
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: nightly
-          override: true
-          target: wasm32-wasip1
-      
-      # Cache Rust dependencies
-      - name: Configure Rust caching
-        uses: Swatinem/rust-cache@v2.7.3
-        with:
-          key: vulkan
-      
-      # Build Zed with Vulkan backend
-      - name: Build release binary
-        env:
-          RUSTFLAGS: ${{ matrix.build_flags }}
-        run: cargo build --release
-      
-      # Upload build artifact
-      - name: Upload build artifact
+          cache-key: ${{ matrix.build_type }}
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          target: "wasm32-wasip1"
+          components: "rustfmt, clippy"
+      - name: Set release channel to nightly
+        run: |
+          echo "stable" > crates/zed/RELEASE_CHANNEL
+      - name: Build to ${{ matrix.build_type }}
+        shell: powershell
+        run: |
+          $env:RUSTFLAGS="--cfg ${{ matrix.build_type }}"
+          $env:ZED_UPDATE_EXPLANATION="Auto-updater is disabled for this build (vhanla/zed-windows)"
+          cargo build --release
+      - name: Archive ${{ matrix.build_type }} build
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.build_artifact_name }}
+          name: zed-${{ matrix.build_type }}
           path: target/release/zed.exe
-          retention-days: 5  # Add retention period for artifacts
-  
+
   release:
-    needs: build
+    needs: [check, build]
+    if: needs.check.outputs.new_release == 'true' || github.event.inputs.manual_release == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
     steps:
-      # Download build artifact
-      - name: Download build artifact
+      - name: Download Vulkan release artifact
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
-      
-      # Generate release timestamp
-      - name: Generate release timestamp
-        id: release_date
-        run: echo "RELEASE_TIMESTAMP=$(date +'%Y%m%d')" >> $GITHUB_ENV
-      
-      # Prepare release package
-      - name: Package release build
+          name: zed-vulkan
+          path: zed-vulkan
+      - name: Download OpenGL ES release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zed-opengl
+          path: zed-opengl
+      - name: Zip the Vulkan build
+        working-directory: zed-vulkan
+        run: zip ../zed-vulkan-${{ needs.check.outputs.latest_release }}.zip zed.exe
+      - name: Zip the OpenGL ES build
+        working-directory: zed-opengl
+        run: zip ../zed-opengl-${{ needs.check.outputs.latest_release }}.zip zed.exe
+      - name: Calculate SHA256 checksum
         run: |
-          # Create directory for Vulkan build
-          mkdir -p zed-release-vulkan
-          
-          # Move executable to the directory
-          mv artifacts/zed-release-vulkan/zed.exe zed-release-vulkan/
-          
-          # Create zip archive
-          zip -r zed-windows-vulkan.zip zed-release-vulkan/*
-      
-      # Create GitHub release
-      - name: Create GitHub release
+          sha256sum zed-vulkan-${{ needs.check.outputs.latest_release }}.zip > zed-vulkan-${{ needs.check.outputs.latest_release }}.zip.sha256
+          sha256sum zed-opengl-${{ needs.check.outputs.latest_release }}.zip > zed-opengl-${{ needs.check.outputs.latest_release }}.zip.sha256
+      - name: Generate Release Notes from Zed
+        run: curl -s https://api.github.com/repos/zed-industries/zed/releases/tags/${{ needs.check.outputs.latest_release }} | jq -r .body > CHANGELOG.txt
+      - name: Generate Release Footer
+        run: echo -e "\n---\nSee [Zed release note](https://github.com/zed-industries/zed/releases/tag/${{ needs.check.outputs.latest_release }}) for more information." >> CHANGELOG.txt
+      - name: Upload release build artifact to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Zed Nightly ${{ env.RELEASE_TIMESTAMP }}  # More descriptive release name
-          tag_name: nightly-${{ env.RELEASE_TIMESTAMP }}  # Better tag format
+          name: Zed for Windows ${{ needs.check.outputs.latest_release }}
+          body_path: CHANGELOG.txt
+          tag_name: ${{ needs.check.outputs.latest_release }}
           draft: false
           make_latest: true
-          body: |
-            Nightly build of Zed editor for Windows
-            - Vulkan backend: Standard graphics backend
+          fail_on_unmatched_files: true
           files: |
-            zed-windows-vulkan.zip
+            zed-vulkan-${{ needs.check.outputs.latest_release }}.zip
+            zed-vulkan-${{ needs.check.outputs.latest_release }}.zip.sha256
+            zed-opengl-${{ needs.check.outputs.latest_release }}.zip
+            zed-opengl-${{ needs.check.outputs.latest_release }}.zip.sha256
