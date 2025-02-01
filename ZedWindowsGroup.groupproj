@@ -1,0 +1,62 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{A3554435-92C8-4706-BE2D-89033BA851E0}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="ZedWin.dproj">
+            <Dependencies>ZedHook.dproj</Dependencies>
+        </Projects>
+        <Projects Include="ZedHook.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="ZedWin" DependsOnTargets="ZedHook">
+        <MSBuild Projects="ZedWin.dproj"/>
+    </Target>
+    <Target Name="ZedWin:Clean" DependsOnTargets="ZedHook:Clean">
+        <MSBuild Projects="ZedWin.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="ZedWin:Make" DependsOnTargets="ZedHook:Make">
+        <MSBuild Projects="ZedWin.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="ZedHook">
+        <MSBuild Projects="ZedHook.dproj"/>
+    </Target>
+    <Target Name="ZedHook:Clean">
+        <MSBuild Projects="ZedHook.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="ZedHook:Make">
+        <MSBuild Projects="ZedHook.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="ZedWin;ZedHook"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="ZedWin:Clean;ZedHook:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="ZedWin:Make;ZedHook:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+    <ItemGroup Condition="'$(BuildGroup)'=='BuildAll'">
+        <BuildGroupProject Include="ZedHook.dproj">
+            <ProjectGuid>{F0396CD4-3086-4273-AF4F-04C65752C507}</ProjectGuid>
+            <Configurations>Debug</Configurations>
+            <Platforms>Win64</Platforms>
+            <Enabled>True</Enabled>
+        </BuildGroupProject>
+        <BuildGroupProject Include="ZedWin.dproj">
+            <ProjectGuid>{DBC0AC30-AE7E-47AF-8DAE-BC2E30EB4286}</ProjectGuid>
+            <Configurations>Debug</Configurations>
+            <Platforms>Win64</Platforms>
+            <Enabled>True</Enabled>
+        </BuildGroupProject>
+    </ItemGroup>
+</Project>
