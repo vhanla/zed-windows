@@ -1,17 +1,12 @@
 name: Build and Release Zed for Windows (Stable)
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/stable.yml"
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: '0 */3 * * *'
   workflow_dispatch:
     inputs:
       manual_release:
-        description: "Manual release?"
+        description: "Force a manual release"
         required: true
         type: boolean
         default: false
@@ -23,115 +18,145 @@ jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
-      latest_release: ${{ steps.latest_release.outputs.tag }}
-      new_release: ${{ steps.check_release.outputs.new_release }}
+      latest_release: ${{ steps.version_check.outputs.ref }}
+      build_flag: ${{ steps.version_check.outputs.build_flag }}
     steps:
-      - name: Get latest release tag from Zed
-        id: latest_release
+      - name: Version check
+        id: version_check
         run: |
-          latest_release=$(curl -s "https://api.github.com/repos/zed-industries/zed/releases/latest" | jq -r .tag_name)
-          echo "tag=$latest_release" >> $GITHUB_OUTPUT
-      - name: Check if there is a new release
-        id: check_release
-        run: |
-          my_release=$(curl -s "https://api.github.com/repos/vhanla/zed-windows/releases/latest" | jq -r .tag_name)
-          if [ "$my_release" != "${{ steps.latest_release.outputs.tag }}" ]; then
-            echo "new_release=true" >> $GITHUB_OUTPUT
+          zed_url="https://api.github.com/repos/zed-industries/zed/releases"
+          this_url="https://api.github.com/repos/${{ github.repository }}/releases"
+
+          echo "Fetching latest stable release from Zed..."
+          latest_stable_zed="$(curl -sL ${zed_url} | jq -r '[.[] | select(.prerelease == false)][0].tag_name')"
+          echo "Latest stable version: ${latest_stable_zed}"
+          
+          echo "Checking published versions..."
+          curl -sL ${this_url} | jq -r '.[].tag_name' > published_versions
+
+          if ! grep -Fxq "${latest_stable_zed}" published_versions ; then
+            echo "New version detected: ${latest_stable_zed}"
+            echo "ref=${latest_stable_zed}" >> $GITHUB_OUTPUT
+            echo "build_flag=true" >> $GITHUB_OUTPUT
           else
-            echo "new_release=false" >> $GITHUB_OUTPUT
+            echo "Version ${latest_stable_zed} already published"
+            echo "build_flag=false" >> $GITHUB_OUTPUT
           fi
 
   build:
     runs-on: windows-latest
-    needs: check
-    if: needs.check.outputs.new_release == 'true' || github.event.inputs.manual_release == 'true' || github.event_name == 'push'
+    needs: [check]
+    if: ${{ needs.check.outputs.build_flag == 'true' || github.event.inputs.manual_release == 'true' }}
     strategy:
       matrix:
         build_type: [vulkan, opengl]
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
     steps:
-      - name: Enable long paths in Git
-        run: |
-          git config --system core.longpaths true
       - name: Enable long paths in Windows
-        shell: powershell
+        shell: pwsh
         run: |
-          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
-            -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+          git config --global core.longpaths true
+
       - name: Checkout Zed
         uses: actions/checkout@v4
         with:
           repository: zed-industries/zed
           ref: ${{ needs.check.outputs.latest_release }}
-      - name: Get toolchain channel
-        id: toolchain
-        shell: powershell
+          path: zed
+
+      - name: Extract toolchain channel
+        id: extract_toolchain
+        working-directory: zed
+        shell: bash
         run: |
-          $channel = (Get-Content rust-toolchain.toml | Select-String -Pattern 'channel' | ForEach-Object { ($_ -split '"')[1] })
-          echo "channel=$channel" >> $GITHUB_OUTPUT
-      - name: Install Rust toolchain
+          TOOLCHAIN_CHANNEL=$(grep 'channel' rust-toolchain.toml | cut -d '"' -f 2)
+          echo "TOOLCHAIN_CHANNEL=$TOOLCHAIN_CHANNEL" >> $GITHUB_OUTPUT
+
+      - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache-key: ${{ matrix.build_type }}
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-          target: "wasm32-wasip1"
-          components: "rustfmt, clippy"
-      - name: Set release channel to nightly
+          toolchain: ${{ steps.extract_toolchain.outputs.TOOLCHAIN_CHANNEL }}
+          target: wasm32-wasip1
+          components: rustfmt, clippy
+
+      - name: Build (${{ matrix.build_type }})
+        working-directory: zed
+        shell: pwsh
+        env:
+          RUSTFLAGS: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static --cfg ${{ matrix.build_type }}"
+          ZED_UPDATE_EXPLANATION: "Auto-updater disabled (vhanla/zed-windows)"
         run: |
-          echo "stable" > crates/zed/RELEASE_CHANNEL
-      - name: Build to ${{ matrix.build_type }}
-        shell: powershell
+          cargo build --release --verbose
+          if (-not (Test-Path ./target/release/zed.exe)) { exit 1 }
+
+      - name: Compress artifacts
+        working-directory: zed/target/release
+        shell: pwsh
         run: |
-          $env:RUSTFLAGS="--cfg ${{ matrix.build_type }}"
-          $env:ZED_UPDATE_EXPLANATION="Auto-updater is disabled for this build (vhanla/zed-windows)"
-          cargo build --release
-      - name: Archive ${{ matrix.build_type }} build
+          $version = "${{ needs.check.outputs.latest_release }}".TrimStart('v')
+          $prefix = "zed-${{ matrix.build_type }}_$version"
+          Compress-Archive -Path zed.exe, zed.pdb -DestinationPath "$prefix.zip"
+
+      - name: Generate checksums
+        working-directory: zed/target/release
+        shell: bash
+        run: |
+          version="${{ needs.check.outputs.latest_release }}"
+          prefix="zed-${{ matrix.build_type }}_${version#v}"
+          sha256sum "$prefix.zip" > "$prefix.zip.sha256"
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: zed-${{ matrix.build_type }}
-          path: target/release/zed.exe
+          path: |
+            zed/target/release/zed-*.zip
+            zed/target/release/zed-*.sha256
+
+      - name: Extract version
+        id: extract_version
+        shell: bash
+        run: |
+          version="${latest_release#v}"
+          echo "version=$version" >> $GITHUB_OUTPUT
 
   release:
     needs: [check, build]
-    if: needs.check.outputs.new_release == 'true' || github.event.inputs.manual_release == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download Vulkan release artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: zed-vulkan
-          path: zed-vulkan
-      - name: Download OpenGL ES release artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: zed-opengl
-          path: zed-opengl
-      - name: Zip the Vulkan build
-        working-directory: zed-vulkan
-        run: zip ../zed-vulkan-${{ needs.check.outputs.latest_release }}.zip zed.exe
-      - name: Zip the OpenGL ES build
-        working-directory: zed-opengl
-        run: zip ../zed-opengl-${{ needs.check.outputs.latest_release }}.zip zed.exe
-      - name: Calculate SHA256 checksum
+          path: artifacts
+
+      - name: Prepare release assets
         run: |
-          sha256sum zed-vulkan-${{ needs.check.outputs.latest_release }}.zip > zed-vulkan-${{ needs.check.outputs.latest_release }}.zip.sha256
-          sha256sum zed-opengl-${{ needs.check.outputs.latest_release }}.zip > zed-opengl-${{ needs.check.outputs.latest_release }}.zip.sha256
-      - name: Generate Release Notes from Zed
-        run: curl -s https://api.github.com/repos/zed-industries/zed/releases/tags/${{ needs.check.outputs.latest_release }} | jq -r .body > CHANGELOG.txt
-      - name: Generate Release Footer
-        run: echo -e "\n---\nSee [Zed release note](https://github.com/zed-industries/zed/releases/tag/${{ needs.check.outputs.latest_release }}) for more information." >> CHANGELOG.txt
-      - name: Upload release build artifact to GitHub Release
+          mkdir release_assets
+          find artifacts -type f \( -name "*.zip" -o -name "*.sha256" \) -exec cp {} release_assets/ \;
+
+      - name: Generate release notes
+        run: |
+          version="${{ needs.check.outputs.latest_release }}"
+          if [[ "$version" == *-* ]]; then
+            base_version="${version%%-*}"
+            url="https://zed.dev/releases/preview/${base_version#v}"
+          else
+            url="https://zed.dev/releases/stable/${version#v}"
+          fi
+          echo "Release notes: $url" > CHANGELOG.md
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          name: Zed for Windows ${{ needs.check.outputs.latest_release }}
-          body_path: CHANGELOG.txt
           tag_name: ${{ needs.check.outputs.latest_release }}
-          draft: false
-          make_latest: true
-          fail_on_unmatched_files: true
+          name: "Zed ${{ needs.check.outputs.latest_release }} (Windows)"
+          body_path: CHANGELOG.md
           files: |
-            zed-vulkan-${{ needs.check.outputs.latest_release }}.zip
-            zed-vulkan-${{ needs.check.outputs.latest_release }}.zip.sha256
-            zed-opengl-${{ needs.check.outputs.latest_release }}.zip
-            zed-opengl-${{ needs.check.outputs.latest_release }}.zip.sha256
+            release_assets/*
+          draft: false
+          prerelease: ${{ contains(needs.check.outputs.latest_release, '-') }}
+          make_latest: true
