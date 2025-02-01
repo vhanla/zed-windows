@@ -9,6 +9,7 @@ An installer is in the works, it will allow you to setup into a non elevated dir
 ![imagen](https://github.com/user-attachments/assets/789e412a-d7fb-47e5-a8ce-2d005946b399)
 
 TODO:
-
-[ ] Update and check zed availability on the System Environment PATH for easy access from command line.
-[ ] Context Menu shell handler for Windows File Explorer
+- [x] Inject DLL to the Zed's Update Menu.
+- [x] Downloader and updater from the Update Checker
+- [ ] Update and check zed availability on the System Environment PATH for easy access from command line.
+- [ ] Context Menu shell handler for Windows File Explorer
