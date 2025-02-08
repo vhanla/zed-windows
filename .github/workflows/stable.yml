@@ -141,13 +141,13 @@ jobs:
       - name: Generate release notes
         run: |
           version="${{ needs.check.outputs.latest_release }}"
-          if [[ "$version" == *-* ]]; then
-            base_version="${version%%-*}"
-            url="https://zed.dev/releases/preview/${base_version#v}"
-          else
-            url="https://zed.dev/releases/stable/${version#v}"
-          fi
-          echo "Release notes: $url" > CHANGELOG.md
+          body=$(curl -s "https://api.github.com/repos/zed-industries/zed/releases/tags/$version" | jq -r .body)
+        
+          echo "## Zed $version Windows Build" > CHANGELOG.md
+          echo -e "\n$body" >> CHANGELOG.md
+          echo -e "\n---\n**Windows Build Details**" >> CHANGELOG.md
+          echo -e "- Built using GitHub Actions\n- Includes both Vulkan and OpenGL backends\n- SHA256 checksums provided for verification" >> CHANGELOG.md
+          echo -e "\nSee [official Zed release notes](https://github.com/zed-industries/zed/releases/tag/$version) for full details." >> CHANGELOG.md
 
       - name: Create release
         uses: softprops/action-gh-release@v2
