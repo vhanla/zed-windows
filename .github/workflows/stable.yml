@@ -112,6 +112,13 @@ jobs:
           rustflags = ["--cfg", "${{ matrix.build_type }}"]
           "@ | Out-File -FilePath .cargo/config.toml -Encoding utf8
 
+      - name: Set UCRT environment
+        shell: pwsh
+        run: |
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
+          echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
+
       - name: Build (${{ matrix.build_type }})
         working-directory: zed
         shell: pwsh
@@ -119,7 +126,9 @@ jobs:
           RUSTFLAGS: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static"
           ZED_UPDATE_EXPLANATION: "Auto-updater disabled (vhanla/zed-windows)"
           ZED_RC_TOOLKIT_PATH: "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.20348.0\\x64"
+          VCPKGRS_DYNAMIC: 0
         run: |
+          $env:VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
           cargo clean
           cargo build --release --verbose
           if (-not (Test-Path ./target/release/zed.exe)) { exit 1 }
