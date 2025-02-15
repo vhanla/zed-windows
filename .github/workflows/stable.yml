@@ -77,7 +77,7 @@ jobs:
         uses: lukka/get-cmake@latest
 
       - name: Setup Windows SDK
-        uses: GuillaumeFalourd/setup-windows10-sdk-action@v1
+        uses: GuillaumeFalourd/setup-windows10-sdk-action@v2.4
         with:
           sdk-version: 20348
 
