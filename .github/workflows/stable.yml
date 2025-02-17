@@ -53,10 +53,10 @@ jobs:
         include:
           - backend: vulkan
             artifact_name: zed-release
-            rustflags: ""
+            rustflags: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static"
           - backend: opengl
             artifact_name: zed-release-opengl
-            rustflags: "--cfg gles"
+            rustflags: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static --cfg gles"
     steps:
       - name: Enable long paths in Git
         run: git config --system core.longpaths true
