@@ -2,7 +2,7 @@ name: Build and Release Zed for Windows
 
 on:
   schedule:
-    - cron: '0 */3 * * *'  # Keeping the 3-hour schedule from the stable workflow
+    - cron: '0 */3 * * *'  # Keeping the 3-hour schedule
   workflow_dispatch:
     inputs:
       manual_release:
@@ -52,9 +52,11 @@ jobs:
         backend: [vulkan, opengl]
         include:
           - backend: vulkan
-            rustflags: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static"
+            artifact_name: zed-release
+            rustflags: ""
           - backend: opengl
-            rustflags: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static --cfg gles"
+            artifact_name: zed-release-opengl
+            rustflags: "--cfg gles"
     steps:
       - name: Enable long paths in Git
         run: git config --system core.longpaths true
@@ -122,7 +124,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zed-${{ matrix.backend }}
+          name: ${{ matrix.artifact_name }}
           path: |
             zed/target/release/zed-*.zip
             zed/target/release/zed-*.sha256
