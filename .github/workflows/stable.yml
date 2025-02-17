@@ -1,8 +1,8 @@
-name: Build and Release Zed for Windows (Stable)
+name: Build and Release Zed for Windows
 
 on:
   schedule:
-    - cron: '0 */3 * * *'
+    - cron: '0 */3 * * *'  # Keeping the 3-hour schedule from the stable workflow
   workflow_dispatch:
     inputs:
       manual_release:
@@ -49,37 +49,20 @@ jobs:
     if: ${{ needs.check.outputs.build_flag == 'true' || github.event.inputs.manual_release == 'true' }}
     strategy:
       matrix:
-        build_type: [vulkan, opengl]
-    outputs:
-      version: ${{ steps.extract_version.outputs.version }}
+        backend: [vulkan, opengl]
+        include:
+          - backend: vulkan
+            rustflags: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static"
+          - backend: opengl
+            rustflags: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static --cfg gles"
     steps:
+      - name: Enable long paths in Git
+        run: git config --system core.longpaths true
+
       - name: Enable long paths in Windows
         shell: pwsh
         run: |
           New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
-          git config --global core.longpaths true
-
-      - name: Install Visual Studio components
-        uses: microsoft/setup-msbuild@v1
-        with:
-          vs-version: '[17.0,18.0)'
-          vs-prerelease: false
-          components: |
-            Microsoft.VisualStudio.Component.CoreEditor
-            Microsoft.VisualStudio.Workload.CoreEditor
-            Microsoft.VisualStudio.Component.VC.Tools.x86.x64
-            Microsoft.VisualStudio.ComponentGroup.WebToolsExtensions.CMake
-            Microsoft.VisualStudio.Component.VC.CMake.Project
-            Microsoft.VisualStudio.Component.Windows11SDK.26100
-            Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre
-
-      - name: Install CMake
-        uses: lukka/get-cmake@latest
-
-      - name: Setup Windows SDK
-        uses: GuillaumeFalourd/setup-windows10-sdk-action@v2.4
-        with:
-          sdk-version: 20348
 
       - name: Checkout Zed
         uses: actions/checkout@v4
@@ -88,46 +71,35 @@ jobs:
           ref: ${{ needs.check.outputs.latest_release }}
           path: zed
 
-      - name: Install rust nightly
+      - name: Extract toolchain channel
+        id: extract_toolchain
+        working-directory: zed
+        shell: bash
+        run: |
+          TOOLCHAIN_CHANNEL=$(grep 'channel' rust-toolchain.toml | cut -d '"' -f 2)
+          echo "TOOLCHAIN_CHANNEL=$TOOLCHAIN_CHANNEL" >> $GITHUB_OUTPUT
+
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly
+          toolchain: ${{ steps.extract_toolchain.outputs.TOOLCHAIN_CHANNEL }}
+          targets: wasm32-wasip1
+          components: rustfmt, clippy
           override: true
-          target: wasm32-wasip1
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.backend }}
           workspaces: "zed -> target"
-          
-      - name: Create .cargo/config.toml
-        shell: pwsh
-        run: |
-          mkdir -p .cargo
-          @"
-          [target.'cfg(all())']
-          rustflags = ["--cfg", "${{ matrix.build_type }}"]
-          "@ | Out-File -FilePath .cargo/config.toml -Encoding utf8
 
-      - name: Set UCRT environment
-        shell: pwsh
-        run: |
-          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
-          echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
-          echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
-
-      - name: Build (${{ matrix.build_type }})
+      - name: Build
         working-directory: zed
         shell: pwsh
         env:
-          RUSTFLAGS: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static"
+          RUSTFLAGS: ${{ matrix.rustflags }}
           ZED_UPDATE_EXPLANATION: "Auto-updater disabled (vhanla/zed-windows)"
-          ZED_RC_TOOLKIT_PATH: "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.20348.0\\x64"
-          VCPKGRS_DYNAMIC: 0
         run: |
-          $env:VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
-          cargo clean
           cargo build --release --verbose
           if (-not (Test-Path ./target/release/zed.exe)) { exit 1 }
 
@@ -136,7 +108,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.check.outputs.latest_release }}".TrimStart('v')
-          $prefix = "zed-${{ matrix.build_type }}_$version"
+          $prefix = "zed-${{ matrix.backend }}_$version"
           Compress-Archive -Path zed.exe, zed.pdb -DestinationPath "$prefix.zip"
 
       - name: Generate checksums
@@ -144,23 +116,16 @@ jobs:
         shell: bash
         run: |
           version="${{ needs.check.outputs.latest_release }}"
-          prefix="zed-${{ matrix.build_type }}_${version#v}"
+          prefix="zed-${{ matrix.backend }}_${version#v}"
           sha256sum "$prefix.zip" > "$prefix.zip.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zed-${{ matrix.build_type }}
+          name: zed-${{ matrix.backend }}
           path: |
             zed/target/release/zed-*.zip
             zed/target/release/zed-*.sha256
-
-      - name: Extract version
-        id: extract_version
-        shell: bash
-        run: |
-          version="${latest_release#v}"
-          echo "version=$version" >> $GITHUB_OUTPUT
 
   release:
     needs: [check, build]
