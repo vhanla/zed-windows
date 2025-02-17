@@ -88,21 +88,19 @@ jobs:
           ref: ${{ needs.check.outputs.latest_release }}
           path: zed
 
-      - name: Extract toolchain channel
-        id: extract_toolchain
-        working-directory: zed
-        shell: bash
-        run: |
-          TOOLCHAIN_CHANNEL=$(grep 'channel' rust-toolchain.toml | cut -d '"' -f 2)
-          echo "TOOLCHAIN_CHANNEL=$TOOLCHAIN_CHANNEL" >> $GITHUB_OUTPUT
-
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install rust nightly
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ steps.extract_toolchain.outputs.TOOLCHAIN_CHANNEL }}
-          target: wasm32-wasi
-          components: rustfmt, clippy
+          toolchain: nightly
+          override: true
+          target: wasm32-wasip1
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.backend }}
+          workspaces: "zed -> target"
+          
       - name: Create .cargo/config.toml
         shell: pwsh
         run: |
