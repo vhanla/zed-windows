@@ -85,9 +85,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ steps.extract_toolchain.outputs.TOOLCHAIN_CHANNEL }}
-          targets: wasm32-wasip1
-          components: rustfmt, clippy
           override: true
+          target: wasm32-wasip1          
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
