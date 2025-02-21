@@ -49,15 +49,25 @@ jobs:
     if: ${{ needs.check.outputs.build_flag == 'true' || github.event.inputs.manual_release == 'true' }}
     strategy:
       matrix:
-        build_type: [vulkan, opengl]
-    outputs:
-      version: ${{ steps.extract_version.outputs.version }}
+        backend: [vulkan, opengl]
+        include:
+          - backend: vulkan
+            artifact_name: zed-release
+            rustflags: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static"
+          - backend: opengl
+            artifact_name: zed-release-opengl
+            rustflags: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static --cfg gles"
     steps:
+      - name: Enable long paths in Git
+        run: git config --system core.longpaths true
+
       - name: Enable long paths in Windows
         shell: pwsh
         run: |
           New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
-          git config --global core.longpaths true
+      
+      - name: Switch to branch
+        uses: actions/checkout@v4
 
       - name: Checkout Zed
         uses: actions/checkout@v4
@@ -74,18 +84,25 @@ jobs:
           TOOLCHAIN_CHANNEL=$(grep 'channel' rust-toolchain.toml | cut -d '"' -f 2)
           echo "TOOLCHAIN_CHANNEL=$TOOLCHAIN_CHANNEL" >> $GITHUB_OUTPUT
 
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ steps.extract_toolchain.outputs.TOOLCHAIN_CHANNEL }}
-          target: wasm32-wasip1
-          components: rustfmt, clippy
+          override: true
+          target: wasm32-wasip1          
 
-      - name: Build (${{ matrix.build_type }})
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.backend }}
+          workspaces: "zed -> target"
+
+      - name: Build
         working-directory: zed
         shell: pwsh
         env:
-          RUSTFLAGS: "-C symbol-mangling-version=v0 --cfg tokio_unstable --cfg windows_slim_errors -C target-feature=+crt-static --cfg ${{ matrix.build_type }}"
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          CARGO_PROFILE_RELEASE_DEBUG: "false" # Disable debug symbols for aws-lc-sys linking error
           ZED_UPDATE_EXPLANATION: "Auto-updater disabled (vhanla/zed-windows)"
         run: |
           cargo build --release --verbose
@@ -96,31 +113,24 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.check.outputs.latest_release }}".TrimStart('v')
-          $prefix = "zed-${{ matrix.build_type }}_$version"
-          Compress-Archive -Path zed.exe, zed.pdb -DestinationPath "$prefix.zip"
+          $prefix = "zed-${{ matrix.backend }}_$version"
+          Compress-Archive -Path zed.exe -DestinationPath "$prefix.zip"
 
       - name: Generate checksums
         working-directory: zed/target/release
         shell: bash
         run: |
           version="${{ needs.check.outputs.latest_release }}"
-          prefix="zed-${{ matrix.build_type }}_${version#v}"
+          prefix="zed-${{ matrix.backend }}_${version#v}"
           sha256sum "$prefix.zip" > "$prefix.zip.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zed-${{ matrix.build_type }}
+          name: ${{ matrix.artifact_name }}
           path: |
             zed/target/release/zed-*.zip
             zed/target/release/zed-*.sha256
-
-      - name: Extract version
-        id: extract_version
-        shell: bash
-        run: |
-          version="${latest_release#v}"
-          echo "version=$version" >> $GITHUB_OUTPUT
 
   release:
     needs: [check, build]
