@@ -102,6 +102,7 @@ jobs:
         shell: pwsh
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
+          CARGO_PROFILE_RELEASE_DEBUG: "false" # Disable debug symbols for aws-lc-sys linking error
           ZED_UPDATE_EXPLANATION: "Auto-updater disabled (vhanla/zed-windows)"
         run: |
           cargo build --release --verbose
@@ -113,7 +114,7 @@ jobs:
         run: |
           $version = "${{ needs.check.outputs.latest_release }}".TrimStart('v')
           $prefix = "zed-${{ matrix.backend }}_$version"
-          Compress-Archive -Path zed.exe, zed.pdb -DestinationPath "$prefix.zip"
+          Compress-Archive -Path zed.exe -DestinationPath "$prefix.zip"
 
       - name: Generate checksums
         working-directory: zed/target/release
